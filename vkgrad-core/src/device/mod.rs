@@ -4,7 +4,7 @@ use smallvec::SmallVec;
 use thiserror::Error;
 
 use crate::{
-    bits::memcpy_bit,
+    bits::{BITS_PER_BYTE, memcpy_bit},
     tensors::{
         dimensions::TensorDimension,
         dtype::TensorDataType,
@@ -115,7 +115,7 @@ pub trait Device {
     fn alloc_tensor(&self, alloc_info: TensorAllocateInfo) -> Result<Tensor, DeviceError> {
         let (min_offset, _, size_in_bits) =
             TensorDimension::calc_offsets_and_size(alloc_info.dtype, alloc_info.dimensions.iter());
-        let size_in_bytes = size_in_bits.div_ceil(TensorDataType::BITS_PER_BYTE);
+        let size_in_bytes = size_in_bits.div_ceil(BITS_PER_BYTE);
         assert!(min_offset <= 0);
         let backend = self.backend();
         log::trace!(

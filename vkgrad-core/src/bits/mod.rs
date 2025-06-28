@@ -1,13 +1,5 @@
 pub const BITS_PER_BYTE: usize = 8;
 
-pub fn bit_offset_to_byte_offset(offset: isize) -> isize {
-    offset.div_euclid(BITS_PER_BYTE as _)
-}
-
-pub fn bit_offset_to_byte_offset_unsigned(offset: usize) -> usize {
-    offset.div_euclid(BITS_PER_BYTE)
-}
-
 pub fn memcpy_bit(
     src: &[u8],
     dst: &mut [u8],

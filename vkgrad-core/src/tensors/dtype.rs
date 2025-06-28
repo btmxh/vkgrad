@@ -1,5 +1,7 @@
 use std::num::NonZeroUsize;
 
+use crate::bits::BITS_PER_BYTE;
+
 /// based on the dlpack API
 /// don't worry, i won't use anything further than F16
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -22,8 +24,6 @@ pub enum TensorDataType {
 }
 
 impl TensorDataType {
-    pub const BITS_PER_BYTE: usize = 8;
-
     pub fn size_in_bits(self) -> usize {
         match self {
             TensorDataType::Int(bits) => bits,
@@ -45,11 +45,11 @@ impl TensorDataType {
     }
 
     pub fn size_in_bytes(self) -> usize {
-        self.size_in_bits().div_ceil(Self::BITS_PER_BYTE)
+        self.size_in_bits().div_ceil(BITS_PER_BYTE)
     }
 
     pub fn is_bit_format(self) -> bool {
-        self.size_in_bits() % Self::BITS_PER_BYTE != 0
+        self.size_in_bits() % BITS_PER_BYTE != 0
     }
 
     pub fn alignment(&self) -> NonZeroUsize {
