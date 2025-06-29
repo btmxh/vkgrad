@@ -49,14 +49,15 @@ $
 For the full formula:
 $ U_alpha = sqrt(8/(27pi)) epsilon a^2K erf^(-1) (root(M N, 1 - alpha)). $
 
-Asymptotically, the erf term can be reduced:
+The erf term can be approximated:
 $
-  erf^(-1) (root(M N, 1 - alpha)) approx erf^(-1) (1 - alpha/(M N)) approx 1/sqrt(2) sqrt(log 2/(pi b^2) - log log 2/(pi b^2)),
+  erf^(-1) (root(M N, 1 - alpha)) & approx erf^(-1) (1 - alpha/(M N))                                     \
+                                  & approx 1/sqrt(2) sqrt(
+                                      log 2/(pi (a/(M N))^2)
+                                      - log log 2/(pi (a/(M N))^2)
+                                    )                                                                     \
+                                  & = sqrt(log (M N)/alpha sqrt(2/pi) - log log (M N)/alpha sqrt(2/pi)) .
 $
-where $b = alpha/(M N)$. Ignoring the log-log term:
-$
-  erf^(-1) (root(M N, 1 - alpha)) approx sqrt(1/2 log (2 (M N)^2) / (pi alpha^2)) = sqrt(log (M N)/alpha sqrt(2/pi) - log log (M N)/alpha sqrt(2/pi)),
-$
-so in conclusion,
-$ U_alpha = sqrt(8/(27pi) (log (M N)/alpha sqrt(2/pi) - log log (M N)/alpha sqrt(2/pi))) epsilon a^2K. $
+In conclusion,
+$ U_alpha approx sqrt(8/(27pi) (log (M N)/alpha sqrt(2/pi) - log log (M N)/alpha sqrt(2/pi))) epsilon a^2K. $
 
