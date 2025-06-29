@@ -60,24 +60,3 @@ $
 so in conclusion,
 $ U_alpha = sqrt(8/(27pi) (log (M N)/alpha sqrt(2/pi) - log log (M N)/alpha sqrt(2/pi))) epsilon a^2K. $
 
-== Experimental results
-
-In https://github.com/btmxh/vkgrad, there is an example comparing the maximum absolute difference between a CPU matmul (BLAS) implementation and a GPU one (Vulkan compute shader). To create an upper bound, we can utilize the expression for $U_alpha$ above, where we picked $alpha = 0.01$.
-
-#{
-  let erfinv = (
-    (64, 3.3318449640164576),
-    (128, 3.526300745117921),
-    (256, 3.7112386390617083),
-    (512, 3.8879113198980666),
-    (1024, 4.057320762924264),
-  )
-  let epsilon = calc.pow(2, -23)
-  let a = 5
-  for (N, erfinv_value) in erfinv {
-    let U_alpha = calc.sqrt(8 / 27 / calc.pi) * epsilon * a * a * N * erfinv_value
-    [#N, #U_alpha]
-  }
-}
-
-
