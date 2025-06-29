@@ -8,7 +8,7 @@
 
 - [ ] Low level tensor API
   - [ ] Matrix multiplication (current speed: GPU 1 TFLOPS, CPU 0.7-0.8 FLOPS)
-    - [x] Baseline naive compute shader implementation (currently ChatGPT code LOL).
+    - [x] Baseline naive compute shader implementation.
     - [ ] Optimized compute shader implementation.
     - [ ] KhrCoopMat compute shader implementation.
     - [ ] NvCoopMat2 compute shader implementation.
@@ -17,8 +17,8 @@
 
 ## Issues
 
-- [ ] Compute shader matmul sometimes give wrong results on certain shapes.
-- [ ] Compute shader currently assumes row-major layout.
+- [x] Compute shader matmul sometimes give wrong results on certain shapes.
+- [x] Compute shader currently assumes row-major layout.
 
 ## References
 

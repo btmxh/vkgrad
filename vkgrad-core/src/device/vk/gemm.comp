@@ -1,8 +1,12 @@
 #version 450
+#extension GL_EXT_control_flow_attributes : enable
+#extension GL_EXT_integer_dot_product: enable
 
+#ifndef TILE_SIZE
 #define TILE_SIZE 16
+#endif
 
-layout(local_size_x = TILE_SIZE, local_size_y = TILE_SIZE, local_size_z = 1) in;
+layout(local_size_x = TILE_SIZE, local_size_y = TILE_SIZE) in;
 
 layout(std430, binding = 0) readonly buffer ABuffer {
     float A[];
@@ -20,46 +24,38 @@ layout(push_constant) uniform PushConsts {
     int M; // rows of A and C
     int N; // cols of B and C
     int K; // cols of A, rows of B
-} push;
+    ivec2 stride_A;
+    ivec2 stride_B;
+    ivec2 stride_C;
+};
 
 shared float Asub[TILE_SIZE][TILE_SIZE];
 shared float Bsub[TILE_SIZE][TILE_SIZE];
 
+// x is row, y is column...
 void main() {
-    uint row = gl_GlobalInvocationID.y;
-    uint col = gl_GlobalInvocationID.x;
+    ivec2 pos_C = ivec2(gl_GlobalInvocationID.xy);
 
     float sum = 0.0;
 
-    for (uint tile = 0; tile < uint((push.K + TILE_SIZE - 1) / TILE_SIZE); ++tile) {
-        // Load A tile
-        uint tiledRow = row;
-        uint tiledCol = tile * TILE_SIZE + gl_LocalInvocationID.x;
-        if (tiledRow < uint(push.M) && tiledCol < uint(push.K)) {
-            Asub[gl_LocalInvocationID.y][gl_LocalInvocationID.x] = A[tiledRow * push.K + tiledCol];
-        } else {
-            Asub[gl_LocalInvocationID.y][gl_LocalInvocationID.x] = 0.0;
-        }
-
-        // Load B tile
-        tiledRow = tile * TILE_SIZE + gl_LocalInvocationID.y;
-        tiledCol = col;
-        if (tiledRow < uint(push.K) && tiledCol < uint(push.N)) {
-            Bsub[gl_LocalInvocationID.y][gl_LocalInvocationID.x] = B[tiledRow * push.N + tiledCol];
-        } else {
-            Bsub[gl_LocalInvocationID.y][gl_LocalInvocationID.x] = 0.0;
-        }
-
+    for (int tile_offset = 0; tile_offset < K; tile_offset += TILE_SIZE) {
+        // load tile into shared memory
+        ivec2 pos_A = ivec2(gl_GlobalInvocationID.x, tile_offset + gl_LocalInvocationID.y);
+        Asub[gl_LocalInvocationID.x][gl_LocalInvocationID.y] =
+            all(lessThan(pos_A, ivec2(M, K))) ? A[dotEXT(pos_A, stride_A)] : float(0.0);
+        ivec2 pos_B = ivec2(tile_offset + gl_LocalInvocationID.x, gl_GlobalInvocationID.y);
+        Bsub[gl_LocalInvocationID.x][gl_LocalInvocationID.y] =
+            all(lessThan(pos_B, ivec2(K, N))) ? B[dotEXT(pos_B, stride_B)] : float(0.0);
         barrier();
 
+        // perform tiled matmul
         for (uint k = 0; k < TILE_SIZE; ++k) {
-            sum += Asub[gl_LocalInvocationID.y][k] * Bsub[k][gl_LocalInvocationID.x];
+            sum += Asub[gl_LocalInvocationID.x][k] * Bsub[k][gl_LocalInvocationID.y];
         }
-
         barrier();
     }
 
-    if (row < uint(push.M) && col < uint(push.N)) {
-        C[row * push.N + col] = sum;
+    if (all(lessThan(pos_C, ivec2(M, N)))) {
+        C[dotEXT(pos_C, stride_C)] = sum;
     }
 }

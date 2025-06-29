@@ -48,6 +48,16 @@ pub trait TensorRefTrait {
         self.dimensions().iter().map(|d| d.stride).collect()
     }
 
+    fn elem_strides(&self) -> Option<SmallVec<[isize; TENSOR_DIM_SMALL_VEC_CAP]>> {
+        self.strides()
+            .iter()
+            .map(|s| match (*s, (self.dtype().size_in_bits() as isize)) {
+                (a, b) if a % b == 0 => Some(a / b),
+                _ => None,
+            })
+            .collect::<Option<SmallVec<[isize; TENSOR_DIM_SMALL_VEC_CAP]>>>()
+    }
+
     fn calc_offsets_and_size(&self) -> (isize, isize, usize) {
         TensorDimension::calc_offsets_and_size(self.dtype(), self.dimensions().iter())
     }

@@ -21,7 +21,10 @@ use vulkano::{
         DescriptorBufferInfo, DescriptorSet, WriteDescriptorSet,
         allocator::{DescriptorSetAllocator, StandardDescriptorSetAllocator},
     },
-    device::{DeviceExtensions, Queue, QueueCreateInfo, QueueFlags, physical::PhysicalDevice},
+    device::{
+        DeviceExtensions, DeviceFeatures, Queue, QueueCreateInfo, QueueFlags,
+        physical::PhysicalDevice,
+    },
     instance::{Instance, InstanceCreateInfo},
     memory::{
         DeviceAlignment,
@@ -193,6 +196,8 @@ pub enum DeviceError {
     AllocateBufferError(#[from] AllocateBufferError),
     #[error("Invalid alignment value: {0}")]
     InvalidAlignmentError(usize),
+    #[error("Invalid stride value")]
+    InvalidStrideError,
     #[error("Unable to execute command buffer: {0}")]
     ExecError(#[from] CommandBufferExecError),
     #[error("Unable to access buffer: {0}")]
@@ -446,6 +451,10 @@ impl Device {
                     queue_family_index: compute_queue_family_idx as u32,
                     ..Default::default()
                 }],
+                enabled_features: DeviceFeatures {
+                    shader_integer_dot_product: true,
+                    ..Default::default()
+                },
                 ..Default::default()
             },
         )?;
@@ -586,13 +595,31 @@ impl Device {
                     gemm::f32::PushConsts {
                         M: M as _,
                         N: N as _,
-                        K: K as _,
+                        K: (K as i32).into(),
+                        stride_A: {
+                            let strides =
+                                lhs.elem_strides().ok_or(DeviceError::InvalidStrideError)?;
+                            log::trace!("{strides:?}");
+                            [strides[0] as _, strides[1] as _]
+                        },
+                        stride_B: {
+                            let strides =
+                                rhs.elem_strides().ok_or(DeviceError::InvalidStrideError)?;
+                            log::trace!("{strides:?}");
+                            [strides[0] as _, strides[1] as _]
+                        },
+                        stride_C: {
+                            let strides =
+                                ans.elem_strides().ok_or(DeviceError::InvalidStrideError)?;
+                            log::trace!("{strides:?}");
+                            [strides[0] as _, strides[1] as _]
+                        },
                     },
                 )?;
             unsafe {
                 cmd.dispatch([
-                    N.div_ceil(gemm::f32::TILE_SIZE) as _,
                     M.div_ceil(gemm::f32::TILE_SIZE) as _,
+                    N.div_ceil(gemm::f32::TILE_SIZE) as _,
                     1,
                 ])?
             };
