@@ -34,27 +34,26 @@ shared float Bsub[TILE_SIZE][TILE_SIZE];
 
 // x is row, y is column...
 void main() {
-    ivec2 pos_C = ivec2(gl_GlobalInvocationID.xy);
-
     float sum = 0.0;
 
     for (int tile_offset = 0; tile_offset < K; tile_offset += TILE_SIZE) {
         // load tile into shared memory
-        ivec2 pos_A = ivec2(gl_GlobalInvocationID.x, tile_offset + gl_LocalInvocationID.y);
-        Asub[gl_LocalInvocationID.x][gl_LocalInvocationID.y] =
+        ivec2 pos_A = ivec2(gl_GlobalInvocationID.y, tile_offset + gl_LocalInvocationID.x);
+        Asub[gl_LocalInvocationID.y][gl_LocalInvocationID.x] =
             all(lessThan(pos_A, ivec2(M, K))) ? A[dotEXT(pos_A, stride_A)] : float(0.0);
-        ivec2 pos_B = ivec2(tile_offset + gl_LocalInvocationID.x, gl_GlobalInvocationID.y);
-        Bsub[gl_LocalInvocationID.x][gl_LocalInvocationID.y] =
+        ivec2 pos_B = ivec2(tile_offset + gl_LocalInvocationID.y, gl_GlobalInvocationID.x);
+        Bsub[gl_LocalInvocationID.y][gl_LocalInvocationID.x] =
             all(lessThan(pos_B, ivec2(K, N))) ? B[dotEXT(pos_B, stride_B)] : float(0.0);
         barrier();
 
         // perform tiled matmul
         for (uint k = 0; k < TILE_SIZE; ++k) {
-            sum += Asub[gl_LocalInvocationID.x][k] * Bsub[k][gl_LocalInvocationID.y];
+            sum += Asub[gl_LocalInvocationID.y][k] * Bsub[k][gl_LocalInvocationID.x];
         }
         barrier();
     }
 
+    ivec2 pos_C = ivec2(gl_GlobalInvocationID.yx);
     if (all(lessThan(pos_C, ivec2(M, N)))) {
         C[dotEXT(pos_C, stride_C)] = sum;
     }
