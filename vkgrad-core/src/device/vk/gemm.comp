@@ -70,7 +70,7 @@ void main() {
     const uvec2 local_pos_B = uvec2(local_row_B, local_col_B);
 
     // transpose trick idk
-    const uvec2 block_pos_C = gl_WorkGroupID.yx * ivec2(BLOCK_M, BLOCK_N);
+    const uvec2 block_pos_C = gl_WorkGroupID.xy * ivec2(BLOCK_M, BLOCK_N);
     const uvec2 thread_pos_C = block_pos_C + local_pos * uvec2(THREAD_M, 1);
 
     float dot_product_total[THREAD_M];
@@ -87,9 +87,13 @@ void main() {
         const uvec2 thread_pos_B = block_pos_B + local_pos_B;
 
         const uint thread_pos_shared_A = local_row_A * BLOCK_K + local_col_A;
-        shared_A[thread_pos_shared_A] = A_get(ivec2(thread_pos_A));
+        if (thread_pos_shared_A < BLOCK_M * BLOCK_K) {
+            shared_A[thread_pos_shared_A] = A_get(ivec2(thread_pos_A));
+        }
         const uint thread_pos_shared_B = local_row_B * BLOCK_N + local_col_B;
-        shared_B[thread_pos_shared_B] = B_get(ivec2(thread_pos_B));
+        if(thread_pos_shared_B < BLOCK_K * BLOCK_N) {
+            shared_B[thread_pos_shared_B] = B_get(ivec2(thread_pos_B));
+        }
 
         barrier();
 
