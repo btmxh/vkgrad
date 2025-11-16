@@ -3,11 +3,23 @@
 #extension GL_EXT_control_flow_attributes : enable
 #extension GL_EXT_integer_dot_product: enable
 
-#ifndef TILE_SIZE
-#define TILE_SIZE 16
+#ifndef BLOCK_M
+#define BLOCK_M 64
 #endif
 
-layout(local_size_x = TILE_SIZE * TILE_SIZE) in;
+#ifndef BLOCK_N
+#define BLOCK_N 64
+#endif
+
+#ifndef BLOCK_K
+#define BLOCK_K 8
+#endif
+
+#ifndef THREAD_M
+#define THREAD_M 8
+#endif
+
+layout(local_size_x = BLOCK_M * BLOCK_N / THREAD_M) in;
 
 layout(std430, binding = 0) readonly buffer ABuffer {
     float A[];
@@ -32,8 +44,8 @@ layout(push_constant) uniform PushConsts {
     float beta;
 };
 
-shared float shared_A[TILE_SIZE * TILE_SIZE];
-shared float shared_B[TILE_SIZE * TILE_SIZE];
+shared float shared_A[BLOCK_M * BLOCK_K];
+shared float shared_B[BLOCK_K * BLOCK_N];
 
 #define matrix_get(matrix, pos, stride, size) \
     ((pos.x) < (size).x && (pos.y) < (size).y ? matrix[dotEXT((pos), (stride))] : 0.0)
@@ -44,38 +56,59 @@ shared float shared_B[TILE_SIZE * TILE_SIZE];
 
 // x is row, y is col
 void main() {
-    const uint local_row = gl_LocalInvocationID.x / TILE_SIZE;
-    const uint local_col = gl_LocalInvocationID.x % TILE_SIZE;
+    // these are coordinates for reading/writing C
+    const uint local_row = gl_LocalInvocationID.x / BLOCK_N;
+    const uint local_col = gl_LocalInvocationID.x % BLOCK_N;
     const uvec2 local_pos = uvec2(local_row, local_col);
 
-    const uvec2 block_pos_C = gl_WorkGroupID.xy * TILE_SIZE;
-    const uvec2 thread_pos_C = block_pos_C + local_pos;
+    // these are coordinates for reading A and B to shared memory
+    const uint local_row_A = gl_LocalInvocationID.x / BLOCK_K;
+    const uint local_col_A = gl_LocalInvocationID.x % BLOCK_K;
+    const uint local_row_B = gl_LocalInvocationID.x / BLOCK_N;
+    const uint local_col_B = gl_LocalInvocationID.x % BLOCK_N;
+    const uvec2 local_pos_A = uvec2(local_row_A, local_col_A);
+    const uvec2 local_pos_B = uvec2(local_row_B, local_col_B);
 
-    float dot_product_total = 0.0;
+    // transpose trick idk
+    const uvec2 block_pos_C = gl_WorkGroupID.yx * ivec2(BLOCK_M, BLOCK_N);
+    const uvec2 thread_pos_C = block_pos_C + local_pos * uvec2(THREAD_M, 1);
+
+    float dot_product_total[THREAD_M];
+    for (int i = 0; i < THREAD_M; ++i) {
+        dot_product_total[i] = 0.0;
+    }
+
     int k = 0;
-    for (int k = 0; k < K; k += TILE_SIZE) {
+    for (int k = 0; k < K; k += BLOCK_K) {
         // Load tiles of A and B into shared_A and shared_B
         const uvec2 block_pos_A = uvec2(block_pos_C.x, k);
         const uvec2 block_pos_B = uvec2(k, block_pos_C.y);
-        const uvec2 thread_pos_A = block_pos_A + local_pos;
-        const uvec2 thread_pos_B = block_pos_B + local_pos;
+        const uvec2 thread_pos_A = block_pos_A + local_pos_A;
+        const uvec2 thread_pos_B = block_pos_B + local_pos_B;
 
-        const uint thread_pos_shared = local_row * TILE_SIZE + local_col;
-        shared_A[thread_pos_shared] = A_get(ivec2(thread_pos_A));
-        shared_B[thread_pos_shared] = B_get(ivec2(thread_pos_B));
+        const uint thread_pos_shared_A = local_row_A * BLOCK_K + local_col_A;
+        shared_A[thread_pos_shared_A] = A_get(ivec2(thread_pos_A));
+        const uint thread_pos_shared_B = local_row_B * BLOCK_N + local_col_B;
+        shared_B[thread_pos_shared_B] = B_get(ivec2(thread_pos_B));
 
         barrier();
 
-        // Compute partial dot product for this tile
-        for (int j = 0; j < TILE_SIZE; ++j) {
-            float a = shared_A[local_row * TILE_SIZE + j];
-            float b = shared_B[j * TILE_SIZE + local_col];
-            dot_product_total += a * b;
+        // Compute partial dot product for this tile, j is the dot product index
+        for (int j = 0; j < BLOCK_K; ++j) {
+            // we use the same b for all m in THREAD_M
+            float b = shared_B[j * BLOCK_N + local_col];
+            for (int m = 0; m < THREAD_M; ++m) {
+                float a = shared_A[(local_row * THREAD_M + m) * BLOCK_K + j];
+                dot_product_total[m] += a * b;
+            }
         }
 
         barrier();
     }
 
-    float final_value = alpha * dot_product_total + beta * C_get(ivec2(thread_pos_C));
-    C_set(thread_pos_C, final_value);
+    for (int m = 0; m < THREAD_M; ++m) {
+        uvec2 pos_C = thread_pos_C + uvec2(m, 0);
+        float final_value = alpha * dot_product_total[m] + beta * C_get(ivec2(pos_C));
+        C_set(pos_C, final_value);
+    }
 }

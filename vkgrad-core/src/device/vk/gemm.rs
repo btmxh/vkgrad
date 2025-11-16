@@ -1,10 +1,13 @@
 pub(super) mod f32 {
-    // make sure the two TILE_SIZE definitions are consistent
-    pub const TILE_SIZE: usize = 16;
+    pub const BLOCK_M: usize = 64;
+    pub const BLOCK_N: usize = 64;
+    pub const BLOCK_K: usize = 8;
+    pub const THREAD_M: usize = 8;
 
+    // make sure the two TILE_SIZE definitions are consistent
     vulkano_shaders::shader! {
         ty: "compute",
-        define: [("TILE_SIZE", "16")],
+        define: [("BLOCK_M", "64"), ("BLOCK_N", "64"), ("BLOCK_K", "8"), ("THREAD_M", "8")],
         path: "src/device/vk/gemm.comp",
     }
 

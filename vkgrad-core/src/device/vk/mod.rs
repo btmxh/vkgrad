@@ -634,8 +634,8 @@ impl Device {
                 )?;
             unsafe {
                 cmd.dispatch([
-                    M.div_ceil(gemm::f32::TILE_SIZE) as _,
-                    N.div_ceil(gemm::f32::TILE_SIZE) as _,
+                    N.div_ceil(gemm::f32::BLOCK_N) as _,
+                    M.div_ceil(gemm::f32::BLOCK_M) as _,
                     1,
                 ])?
             };
