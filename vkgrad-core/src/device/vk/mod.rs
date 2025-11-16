@@ -338,13 +338,19 @@ impl super::Device for Device {
         lhs: &TensorRef,
         rhs: &TensorRef,
         ans: &mut TensorMut,
+        alpha: f32,
+        beta: f32,
+        transpose_lhs: bool,
+        transpose_rhs: bool,
     ) -> Result<(), super::DeviceError> {
         if lhs.dtype != rhs.dtype {
             return Err(super::DeviceError::MismatchDtype(lhs.dtype, rhs.dtype));
         }
 
         match lhs.dtype {
-            TensorDataType::Float(32) => self.gemm_f32(lhs, rhs, ans),
+            TensorDataType::Float(32) => {
+                self.gemm_f32(lhs, rhs, ans, alpha, beta, transpose_lhs, transpose_rhs)
+            }
             _ => Err(super::DeviceError::UnsupportedFeature),
         }
     }
@@ -551,11 +557,16 @@ impl Device {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn gemm_f32(
         &self,
         lhs: &TensorRef,
         rhs: &TensorRef,
         ans: &mut TensorMut,
+        alpha: f32,
+        beta: f32,
+        transpose_lhs: bool,
+        transpose_rhs: bool,
     ) -> Result<(), super::DeviceError> {
         let lshape = lhs.shape();
         let rshape = rhs.shape();
@@ -572,9 +583,15 @@ impl Device {
 
         log::trace!("Performing f32 GEMM: ({M}, {K}) x ({K}, {N}) -> ({M}, {N})");
 
-        let stride_lhs = lhs.elem_strides().ok_or(DeviceError::InvalidStrideError)?;
-        let stride_rhs = rhs.elem_strides().ok_or(DeviceError::InvalidStrideError)?;
+        let mut stride_lhs = lhs.elem_strides().ok_or(DeviceError::InvalidStrideError)?;
+        let mut stride_rhs = rhs.elem_strides().ok_or(DeviceError::InvalidStrideError)?;
         let stride_ans = ans.elem_strides().ok_or(DeviceError::InvalidStrideError)?;
+        if transpose_lhs {
+            stride_lhs.swap(0, 1);
+        }
+        if transpose_rhs {
+            stride_rhs.swap(0, 1);
+        }
         log::trace!(
             "LHS strides: {:?}, RHS strides: {:?}, ANS strides: {:?}",
             stride_lhs,
@@ -611,6 +628,8 @@ impl Device {
                         stride_A: [stride_lhs[0] as _, stride_lhs[1] as _],
                         stride_B: [stride_rhs[0] as _, stride_rhs[1] as _],
                         stride_C: [stride_ans[0] as _, stride_ans[1] as _],
+                        alpha,
+                        beta,
                     },
                 )?;
             unsafe {

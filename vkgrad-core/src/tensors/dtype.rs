@@ -49,7 +49,7 @@ impl TensorDataType {
     }
 
     pub fn is_bit_format(self) -> bool {
-        self.size_in_bits() % BITS_PER_BYTE != 0
+        !self.size_in_bits().is_multiple_of(BITS_PER_BYTE)
     }
 
     pub fn alignment(&self) -> NonZeroUsize {

@@ -28,6 +28,8 @@ layout(push_constant) uniform PushConsts {
     ivec2 stride_A;
     ivec2 stride_B;
     ivec2 stride_C;
+    float alpha;
+    float beta;
 };
 
 shared float shared_A[TILE_SIZE * TILE_SIZE];
@@ -74,5 +76,6 @@ void main() {
         barrier();
     }
 
-    C_set(thread_pos_C, dot_product_total);
+    float final_value = alpha * dot_product_total + beta * C_get(ivec2(thread_pos_C));
+    C_set(thread_pos_C, final_value);
 }

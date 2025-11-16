@@ -21,7 +21,7 @@ fn ndarray_matmul<A: Float + 'static>(a: ArrayView2<'_, A>, b: ArrayView2<'_, A>
 }
 
 fn vulkan_matmul(lhs: &TensorRef<'_>, rhs: &TensorRef<'_>, ans: &mut TensorMut<'_>) {
-    lhs.device().gemm(lhs, rhs, ans).unwrap();
+    lhs.device().gemm(lhs, rhs, ans, 1.0, 0.0, false, false).unwrap();
 }
 
 fn matmul_bench<S>(
