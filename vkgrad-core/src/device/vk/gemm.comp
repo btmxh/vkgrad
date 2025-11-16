@@ -1,4 +1,5 @@
 #version 450
+#extension GL_KHR_vulkan_memory_model: enable
 #extension GL_EXT_control_flow_attributes : enable
 #extension GL_EXT_integer_dot_product: enable
 
@@ -47,7 +48,7 @@ void main() {
         barrier();
 
         // perform tiled matmul
-        for (uint k = 0; k < TILE_SIZE; ++k) {
+        [[unroll]] for (uint k = 0; k < TILE_SIZE; ++k) {
             sum += Asub[gl_LocalInvocationID.y][k] * Bsub[k][gl_LocalInvocationID.x];
         }
         barrier();
