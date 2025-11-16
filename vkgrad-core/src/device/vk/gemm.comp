@@ -86,13 +86,26 @@ void main() {
         const uvec2 thread_pos_A = block_pos_A + local_pos_A;
         const uvec2 thread_pos_B = block_pos_B + local_pos_B;
 
-        const uint thread_pos_shared_A = local_row_A * BLOCK_K + local_col_A;
-        if (thread_pos_shared_A < BLOCK_M * BLOCK_K) {
-            shared_A[thread_pos_shared_A] = A_get(ivec2(thread_pos_A));
+        // Note that since number of threads != number of elements in shared_A
+        // and shared_B, a thread might have to load multiple elements or none
+        // at all
+        #define CEIL_DIV(M, N) (((M) + (N)-1) / (N))
+        #define NUM_TO_LOAD_A CEIL_DIV(shared_A.length(), gl_WorkGroupSize.x)
+        #define NUM_TO_LOAD_B CEIL_DIV(shared_B.length(), gl_WorkGroupSize.x)
+
+        for (int i = 0; i < NUM_TO_LOAD_A; ++i) {
+            const uint thread_pos_shared_A = (local_row_A + i * gl_WorkGroupSize.x / BLOCK_K) * BLOCK_K + local_col_A;
+            const uvec2 thread_pos_A_i = thread_pos_A + uvec2(i * gl_WorkGroupSize.x / BLOCK_K, 0);
+            if (thread_pos_shared_A < BLOCK_M * BLOCK_K) {
+                shared_A[thread_pos_shared_A] = A_get(ivec2(thread_pos_A_i));
+            }
         }
-        const uint thread_pos_shared_B = local_row_B * BLOCK_N + local_col_B;
-        if(thread_pos_shared_B < BLOCK_K * BLOCK_N) {
-            shared_B[thread_pos_shared_B] = B_get(ivec2(thread_pos_B));
+        for (int i = 0; i < NUM_TO_LOAD_B; ++i) {
+            const uint thread_pos_shared_B = (local_row_B + i * gl_WorkGroupSize.x / BLOCK_N) * BLOCK_N + local_col_B;
+            const uvec2 thread_pos_B_i = thread_pos_B + uvec2(i * gl_WorkGroupSize.x / BLOCK_N, 0);
+            if (thread_pos_shared_B < BLOCK_K * BLOCK_N) {
+                shared_B[thread_pos_shared_B] = B_get(ivec2(thread_pos_B_i));
+            }
         }
 
         barrier();
