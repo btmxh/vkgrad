@@ -8,6 +8,7 @@ use std::{
     },
 };
 
+use log::Level;
 use thiserror::Error;
 use vulkano::{
     DeviceSize, NonZeroDeviceSize, Version, VulkanLibrary,
@@ -25,7 +26,13 @@ use vulkano::{
         DeviceExtensions, DeviceFeatures, Queue, QueueCreateInfo, QueueFlags,
         physical::PhysicalDevice,
     },
-    instance::{Instance, InstanceCreateInfo},
+    instance::{
+        Instance, InstanceCreateInfo,
+        debug::{
+            DebugUtilsMessageSeverity, DebugUtilsMessageType, DebugUtilsMessenger,
+            DebugUtilsMessengerCallback, DebugUtilsMessengerCreateInfo, ValidationFeatureEnable,
+        },
+    },
     memory::{
         DeviceAlignment,
         allocator::{
@@ -112,6 +119,7 @@ impl TensorAccelerator {
 #[derive(Debug, Default)]
 pub struct BackendSpecificInfo {
     tensor_accelerator: Option<TensorAccelerator>,
+    debug_mode: Option<bool>,
 }
 
 #[derive(Default)]
@@ -167,6 +175,7 @@ pub struct TensorManagerContext(BufferHandle);
 pub struct Device {
     _library: Arc<VulkanLibrary>,
     _instance: Arc<Instance>,
+    _debug_messenger: Option<DebugUtilsMessenger>,
     _physical_device: Arc<PhysicalDevice>,
     queue_family_idx: u32,
     device: Arc<vulkano::device::Device>,
@@ -361,6 +370,86 @@ impl Device {
         let library = VulkanLibrary::new()?;
         log::debug!("Loaded Vulkan library version {}", library.api_version());
 
+        let debug = info.vk.debug_mode.unwrap_or(cfg!(debug_assertions));
+        let (
+            enabled_extensions,
+            enabled_layers,
+            enabled_validation_features,
+            debug_utils_messengers,
+        ) = if debug {
+            (
+                vulkano::instance::InstanceExtensions {
+                    ext_debug_utils: true,
+                    ext_validation_features: true,
+                    ..Default::default()
+                },
+                vec!["VK_LAYER_KHRONOS_validation".into()],
+                vec![ValidationFeatureEnable::DebugPrintf],
+                vec![unsafe {
+                    DebugUtilsMessengerCreateInfo {
+                        message_severity: DebugUtilsMessageSeverity::ERROR
+                            | DebugUtilsMessageSeverity::WARNING
+                            | DebugUtilsMessageSeverity::INFO
+                            | DebugUtilsMessageSeverity::VERBOSE,
+                        message_type: DebugUtilsMessageType::GENERAL
+                            | DebugUtilsMessageType::VALIDATION
+                            | DebugUtilsMessageType::PERFORMANCE,
+                        ..DebugUtilsMessengerCreateInfo::user_callback(
+                            DebugUtilsMessengerCallback::new(
+                                |message_severity, message_type, callback_data| {
+                                    let severity = if message_severity
+                                        .intersects(DebugUtilsMessageSeverity::ERROR)
+                                    {
+                                        Level::Error
+                                    } else if message_severity
+                                        .intersects(DebugUtilsMessageSeverity::WARNING)
+                                    {
+                                        Level::Warn
+                                    } else if message_severity
+                                        .intersects(DebugUtilsMessageSeverity::INFO)
+                                    {
+                                        Level::Info
+                                    } else if message_severity
+                                        .intersects(DebugUtilsMessageSeverity::VERBOSE)
+                                    {
+                                        Level::Trace
+                                    } else {
+                                        panic!("no-impl");
+                                    };
+
+                                    let ty = if message_type
+                                        .intersects(DebugUtilsMessageType::GENERAL)
+                                    {
+                                        "General"
+                                    } else if message_type
+                                        .intersects(DebugUtilsMessageType::VALIDATION)
+                                    {
+                                        "Validation"
+                                    } else if message_type
+                                        .intersects(DebugUtilsMessageType::PERFORMANCE)
+                                    {
+                                        "Performance"
+                                    } else {
+                                        panic!("no-impl");
+                                    };
+
+                                    log::log!(
+                                        severity,
+                                        "[{}] {}: {}",
+                                        ty,
+                                        callback_data.message_id_name.unwrap_or("unknown"),
+                                        callback_data.message
+                                    );
+                                },
+                            ),
+                        )
+                    }
+                }],
+            )
+        } else {
+            Default::default()
+        };
+
         let instance = Instance::new(
             library.clone(),
             InstanceCreateInfo {
@@ -369,6 +458,10 @@ impl Device {
                 engine_name: Some("vkgrad-core".into()),
                 engine_version: Version::major_minor(0, 1),
                 max_api_version: Some(Version::V1_4),
+                enabled_extensions,
+                enabled_layers,
+                enabled_validation_features,
+                debug_utils_messengers: debug_utils_messengers.clone(),
                 ..Default::default()
             },
         )?;
@@ -377,6 +470,10 @@ impl Device {
             instance.max_api_version()
         );
 
+        let debug_messenger = debug_utils_messengers
+            .first()
+            .map(|msg| DebugUtilsMessenger::new(instance.clone(), msg.clone()))
+            .transpose()?;
         let (physical_device, compute_queue_family_idx) = instance
             .enumerate_physical_devices()?
             .filter_map(|p| {
@@ -501,6 +598,7 @@ impl Device {
         Ok(Self {
             _library: library,
             _instance: instance,
+            _debug_messenger: debug_messenger,
             _physical_device: physical_device,
             queue_family_idx: compute_queue_family_idx as _,
             mem_allocator,
