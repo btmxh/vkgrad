@@ -46,6 +46,10 @@ fn main() -> anyhow::Result<()> {
         &device_lhs.as_ref(),
         &device_rhs.as_ref(),
         &mut device_ans.as_mut(),
+        1.0,
+        0.0,
+        false,
+        false,
     )?;
 
     let ans_readback = device_ans.to_ndarray::<f32, Ix2>()?;

@@ -18,9 +18,12 @@ use crate::{
     device::{DeviceBackend, TensorAllocateInfo},
     tensors::{
         dimensions::TensorDimension,
-        dtype::TensorDataTypeTrait,
+        dtype::{TensorDataType, TensorDataTypeTrait},
         owned::Tensor,
-        views::{TENSOR_DIM_SMALL_VEC_CAP, TensorMut, TensorRef, TensorRefTrait},
+        views::{
+            MutPtr, Ptr, TENSOR_DIM_SMALL_VEC_CAP, TensorMut, TensorMutTrait, TensorRef,
+            TensorRefTrait,
+        },
     },
 };
 
@@ -41,6 +44,8 @@ pub enum DeviceError {
     InvalidLayoutError(LayoutError),
     #[error("Allocation error")]
     AllocationError,
+    #[error("Invalid alignment error")]
+    InvalidAlignmentError,
 }
 
 pub enum TensorManagerContext {
@@ -113,6 +118,35 @@ impl super::Device for Device {
             std::slice::from_raw_parts_mut((ptr as *mut u8).add(offset), data.len())
                 .copy_from_slice(data);
             Ok(())
+        }
+    }
+
+    fn gemm(
+        &self,
+        lhs: &TensorRef,
+        rhs: &TensorRef,
+        ans: &mut TensorMut,
+        alpha: f32,
+        beta: f32,
+        transpose_lhs: bool,
+        transpose_rhs: bool,
+    ) -> Result<(), super::DeviceError> {
+        match lhs.dtype {
+            TensorDataType::Float(_) => {
+                let mut lhs = self.tensor_to_ndarray_ref::<_, Ix2>(lhs)?;
+                let mut rhs = self.tensor_to_ndarray_ref::<_, Ix2>(rhs)?;
+                let mut ans = self.tensor_to_ndarray_mut::<_, Ix2, _>(ans)?;
+                if transpose_lhs {
+                    lhs = lhs.reversed_axes();
+                }
+                if transpose_rhs {
+                    rhs = rhs.reversed_axes();
+                }
+                ans *= beta;
+                ans.scaled_add(alpha, &lhs.dot(&rhs));
+                Ok(())
+            }
+            _ => Err(super::DeviceError::UnsupportedFeature),
         }
     }
 }
@@ -287,6 +321,28 @@ impl Device {
         }
     }
 
+    fn strides_to_ndarray<A, Dim>(&self, strides: &[isize]) -> Result<Dim, DeviceError>
+    where
+        A: TensorDataTypeTrait,
+        [usize]: TryIntoDim<Dim>,
+        Dim: Dimension,
+    {
+        let strides = strides
+            .iter()
+            .map(|stride| -> Result<usize, DeviceError> {
+                let stride =
+                    usize::try_from(*stride).map_err(|_| DeviceError::NegativeStrideError)?;
+                if stride % A::data_type().size_in_bits() == 0 {
+                    Ok(stride / A::data_type().size_in_bits())
+                } else {
+                    Err(DeviceError::NonElementMultipleStrideError)
+                }
+            })
+            .collect::<Result<SmallVec<[usize; TENSOR_DIM_SMALL_VEC_CAP]>, DeviceError>>()?;
+        let strides: Dim = strides.as_ref().try_into_dim()?;
+        Ok(strides)
+    }
+
     pub fn tensor_to_ndarray<A, Dim>(
         &self,
         tensor: Tensor,
@@ -317,21 +373,78 @@ impl Device {
                         .unwrap()
                         // .map_err(|_| DeviceError::InvalidTypeCast)?
                         .into_vec();
-                    let strides = TensorRefTrait::strides(&view).into_iter().map(|stride| -> Result<usize, DeviceError> {
-                        let stride = usize::try_from(stride).map_err(|_| DeviceError::NegativeStrideError)?;
-                        if stride % A::data_type().size_in_bits() == 0 {
-                            Ok(stride / A::data_type().size_in_bits())
-                        } else {
-                            Err(DeviceError::NonElementMultipleStrideError)
-                        }
-                    }).collect::<Result<SmallVec<[usize; TENSOR_DIM_SMALL_VEC_CAP]>, DeviceError>>()?;
+                    let strides =
+                        self.strides_to_ndarray::<A, _>(TensorRefTrait::strides(&view).as_slice())?;
                     let shape: Dim = view.shape().as_ref().try_into_dim()?;
-                    let strides: Dim = strides.as_ref().try_into_dim()?;
                     let shape = shape.strides(strides);
                     Ok(Array::from_shape_vec(shape, items).map_err(DeviceError::ShapeError)?)
                 }
             },
             Err(_) => panic!("invalid CPU tensor manager context"),
         }
+    }
+
+    /// # Safety
+    /// Caller must ensure that the tensor is properly aligned and valid for type A
+    pub fn tensor_to_ndarray_ref<'a, A, D>(
+        &self,
+        tensor: &'a impl TensorRefTrait,
+    ) -> Result<ArrayView<'a, A, D>, DeviceError>
+    where
+        [usize]: TryIntoDim<D>,
+        D: Dimension,
+        A: TensorDataTypeTrait,
+    {
+        if tensor.dtype() != A::data_type() {
+            return Err(DeviceError::InvalidTypeCast);
+        }
+
+        let ptr = tensor.memory().to_ptr();
+        let offset = tensor.memory_offset();
+
+        if !offset.is_multiple_of(BITS_PER_BYTE) {
+            return Err(DeviceError::InvalidAlignmentError);
+        }
+
+        let ptr = unsafe { ptr.add(offset / BITS_PER_BYTE) as *const A };
+        let dim = tensor.shape().try_into_dim()?;
+        let strides = self.strides_to_ndarray::<A, _>(tensor.strides().as_slice())?;
+        let shape = dim.strides(strides);
+        let view = unsafe { ArrayView::from_shape_ptr(shape, ptr) };
+
+        Ok(view)
+    }
+
+    /// # Safety
+    /// Caller must ensure that the tensor is properly aligned and valid for type A
+    pub fn tensor_to_ndarray_mut<'a, A, D, T>(
+        &self,
+        tensor: &'a mut T,
+    ) -> Result<ndarray::ArrayViewMut<'a, A, D>, DeviceError>
+    where
+        [usize]: TryIntoDim<D>,
+        D: Dimension,
+        A: TensorDataTypeTrait,
+        T: TensorMutTrait,
+        <T as TensorRefTrait>::Memory: MutPtr,
+    {
+        if tensor.dtype() != A::data_type() {
+            return Err(DeviceError::InvalidTypeCast);
+        }
+
+        let ptr = tensor.memory().to_mut_ptr();
+        let offset = tensor.memory_offset();
+
+        if !offset.is_multiple_of(BITS_PER_BYTE) {
+            return Err(DeviceError::InvalidAlignmentError);
+        }
+
+        let ptr = unsafe { ptr.add(offset / BITS_PER_BYTE) as *mut A };
+        let strides = self.strides_to_ndarray::<A, _>(tensor.strides().as_slice())?;
+        let dim = tensor.shape().try_into_dim()?;
+        let shape = dim.strides(strides);
+        let view = unsafe { ArrayViewMut::from_shape_ptr(shape, ptr) };
+
+        Ok(view)
     }
 }

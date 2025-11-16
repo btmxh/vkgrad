@@ -156,11 +156,16 @@ pub trait Device {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn gemm(
         &self,
         _lhs: &TensorRef,
         _rhs: &TensorRef,
         _ans: &mut TensorMut,
+        _alpha: f32,
+        _beta: f32,
+        _transpose_lhs: bool,
+        _transpose_rhs: bool,
     ) -> Result<(), DeviceError> {
         Err(DeviceError::UnsupportedFeature)
     }

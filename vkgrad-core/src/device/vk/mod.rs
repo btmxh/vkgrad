@@ -8,6 +8,7 @@ use std::{
     },
 };
 
+use log::Level;
 use thiserror::Error;
 use vulkano::{
     DeviceSize, NonZeroDeviceSize, Version, VulkanLibrary,
@@ -25,7 +26,13 @@ use vulkano::{
         DeviceExtensions, DeviceFeatures, Queue, QueueCreateInfo, QueueFlags,
         physical::PhysicalDevice,
     },
-    instance::{Instance, InstanceCreateInfo},
+    instance::{
+        Instance, InstanceCreateInfo,
+        debug::{
+            DebugUtilsMessageSeverity, DebugUtilsMessageType, DebugUtilsMessenger,
+            DebugUtilsMessengerCallback, DebugUtilsMessengerCreateInfo, ValidationFeatureEnable,
+        },
+    },
     memory::{
         DeviceAlignment,
         allocator::{
@@ -112,6 +119,7 @@ impl TensorAccelerator {
 #[derive(Debug, Default)]
 pub struct BackendSpecificInfo {
     tensor_accelerator: Option<TensorAccelerator>,
+    debug_mode: Option<bool>,
 }
 
 #[derive(Default)]
@@ -167,6 +175,7 @@ pub struct TensorManagerContext(BufferHandle);
 pub struct Device {
     _library: Arc<VulkanLibrary>,
     _instance: Arc<Instance>,
+    _debug_messenger: Option<DebugUtilsMessenger>,
     _physical_device: Arc<PhysicalDevice>,
     queue_family_idx: u32,
     device: Arc<vulkano::device::Device>,
@@ -338,13 +347,19 @@ impl super::Device for Device {
         lhs: &TensorRef,
         rhs: &TensorRef,
         ans: &mut TensorMut,
+        alpha: f32,
+        beta: f32,
+        transpose_lhs: bool,
+        transpose_rhs: bool,
     ) -> Result<(), super::DeviceError> {
         if lhs.dtype != rhs.dtype {
             return Err(super::DeviceError::MismatchDtype(lhs.dtype, rhs.dtype));
         }
 
         match lhs.dtype {
-            TensorDataType::Float(32) => self.gemm_f32(lhs, rhs, ans),
+            TensorDataType::Float(32) => {
+                self.gemm_f32(lhs, rhs, ans, alpha, beta, transpose_lhs, transpose_rhs)
+            }
             _ => Err(super::DeviceError::UnsupportedFeature),
         }
     }
@@ -355,6 +370,86 @@ impl Device {
         let library = VulkanLibrary::new()?;
         log::debug!("Loaded Vulkan library version {}", library.api_version());
 
+        let debug = info.vk.debug_mode.unwrap_or(cfg!(debug_assertions));
+        let (
+            enabled_extensions,
+            enabled_layers,
+            enabled_validation_features,
+            debug_utils_messengers,
+        ) = if debug {
+            (
+                vulkano::instance::InstanceExtensions {
+                    ext_debug_utils: true,
+                    ext_validation_features: true,
+                    ..Default::default()
+                },
+                vec!["VK_LAYER_KHRONOS_validation".into()],
+                vec![ValidationFeatureEnable::DebugPrintf],
+                vec![unsafe {
+                    DebugUtilsMessengerCreateInfo {
+                        message_severity: DebugUtilsMessageSeverity::ERROR
+                            | DebugUtilsMessageSeverity::WARNING
+                            | DebugUtilsMessageSeverity::INFO
+                            | DebugUtilsMessageSeverity::VERBOSE,
+                        message_type: DebugUtilsMessageType::GENERAL
+                            | DebugUtilsMessageType::VALIDATION
+                            | DebugUtilsMessageType::PERFORMANCE,
+                        ..DebugUtilsMessengerCreateInfo::user_callback(
+                            DebugUtilsMessengerCallback::new(
+                                |message_severity, message_type, callback_data| {
+                                    let severity = if message_severity
+                                        .intersects(DebugUtilsMessageSeverity::ERROR)
+                                    {
+                                        Level::Error
+                                    } else if message_severity
+                                        .intersects(DebugUtilsMessageSeverity::WARNING)
+                                    {
+                                        Level::Warn
+                                    } else if message_severity
+                                        .intersects(DebugUtilsMessageSeverity::INFO)
+                                    {
+                                        Level::Info
+                                    } else if message_severity
+                                        .intersects(DebugUtilsMessageSeverity::VERBOSE)
+                                    {
+                                        Level::Trace
+                                    } else {
+                                        panic!("no-impl");
+                                    };
+
+                                    let ty = if message_type
+                                        .intersects(DebugUtilsMessageType::GENERAL)
+                                    {
+                                        "General"
+                                    } else if message_type
+                                        .intersects(DebugUtilsMessageType::VALIDATION)
+                                    {
+                                        "Validation"
+                                    } else if message_type
+                                        .intersects(DebugUtilsMessageType::PERFORMANCE)
+                                    {
+                                        "Performance"
+                                    } else {
+                                        panic!("no-impl");
+                                    };
+
+                                    log::log!(
+                                        severity,
+                                        "[{}] {}: {}",
+                                        ty,
+                                        callback_data.message_id_name.unwrap_or("unknown"),
+                                        callback_data.message
+                                    );
+                                },
+                            ),
+                        )
+                    }
+                }],
+            )
+        } else {
+            Default::default()
+        };
+
         let instance = Instance::new(
             library.clone(),
             InstanceCreateInfo {
@@ -363,6 +458,10 @@ impl Device {
                 engine_name: Some("vkgrad-core".into()),
                 engine_version: Version::major_minor(0, 1),
                 max_api_version: Some(Version::V1_4),
+                enabled_extensions,
+                enabled_layers,
+                enabled_validation_features,
+                debug_utils_messengers: debug_utils_messengers.clone(),
                 ..Default::default()
             },
         )?;
@@ -371,6 +470,10 @@ impl Device {
             instance.max_api_version()
         );
 
+        let debug_messenger = debug_utils_messengers
+            .first()
+            .map(|msg| DebugUtilsMessenger::new(instance.clone(), msg.clone()))
+            .transpose()?;
         let (physical_device, compute_queue_family_idx) = instance
             .enumerate_physical_devices()?
             .filter_map(|p| {
@@ -495,6 +598,7 @@ impl Device {
         Ok(Self {
             _library: library,
             _instance: instance,
+            _debug_messenger: debug_messenger,
             _physical_device: physical_device,
             queue_family_idx: compute_queue_family_idx as _,
             mem_allocator,
@@ -551,11 +655,16 @@ impl Device {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn gemm_f32(
         &self,
         lhs: &TensorRef,
         rhs: &TensorRef,
         ans: &mut TensorMut,
+        alpha: f32,
+        beta: f32,
+        transpose_lhs: bool,
+        transpose_rhs: bool,
     ) -> Result<(), super::DeviceError> {
         let lshape = lhs.shape();
         let rshape = rhs.shape();
@@ -569,6 +678,24 @@ impl Device {
         let N = rshape[1];
         #[allow(non_snake_case)]
         let K = lshape[1];
+
+        log::trace!("Performing f32 GEMM: ({M}, {K}) x ({K}, {N}) -> ({M}, {N})");
+
+        let mut stride_lhs = lhs.elem_strides().ok_or(DeviceError::InvalidStrideError)?;
+        let mut stride_rhs = rhs.elem_strides().ok_or(DeviceError::InvalidStrideError)?;
+        let stride_ans = ans.elem_strides().ok_or(DeviceError::InvalidStrideError)?;
+        if transpose_lhs {
+            stride_lhs.swap(0, 1);
+        }
+        if transpose_rhs {
+            stride_rhs.swap(0, 1);
+        }
+        log::trace!(
+            "LHS strides: {:?}, RHS strides: {:?}, ANS strides: {:?}",
+            stride_lhs,
+            stride_rhs,
+            stride_ans
+        );
 
         let desc_set = DescriptorSet::new(
             self.descriptor_set_allocator.clone(),
@@ -596,30 +723,17 @@ impl Device {
                         M: M as _,
                         N: N as _,
                         K: (K as i32).into(),
-                        stride_A: {
-                            let strides =
-                                lhs.elem_strides().ok_or(DeviceError::InvalidStrideError)?;
-                            log::trace!("{strides:?}");
-                            [strides[0] as _, strides[1] as _]
-                        },
-                        stride_B: {
-                            let strides =
-                                rhs.elem_strides().ok_or(DeviceError::InvalidStrideError)?;
-                            log::trace!("{strides:?}");
-                            [strides[0] as _, strides[1] as _]
-                        },
-                        stride_C: {
-                            let strides =
-                                ans.elem_strides().ok_or(DeviceError::InvalidStrideError)?;
-                            log::trace!("{strides:?}");
-                            [strides[0] as _, strides[1] as _]
-                        },
+                        stride_A: [stride_lhs[0] as _, stride_lhs[1] as _],
+                        stride_B: [stride_rhs[0] as _, stride_rhs[1] as _],
+                        stride_C: [stride_ans[0] as _, stride_ans[1] as _],
+                        alpha,
+                        beta,
                     },
                 )?;
             unsafe {
                 cmd.dispatch([
-                    N.div_ceil(gemm::f32::TILE_SIZE) as _,
-                    M.div_ceil(gemm::f32::TILE_SIZE) as _,
+                    M.div_ceil(gemm::f32::BLOCK_M) as _,
+                    N.div_ceil(gemm::f32::BLOCK_N) as _,
                     1,
                 ])?
             };
