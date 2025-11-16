@@ -112,7 +112,7 @@ pub trait Device {
         Err(DeviceError::UnsupportedFeature)
     }
 
-    fn alloc_tensor(&self, alloc_info: TensorAllocateInfo) -> Result<Tensor, DeviceError> {
+    fn alloc_tensor(&self, alloc_info: TensorAllocateInfo) -> Result<Tensor<'_>, DeviceError> {
         let (min_offset, _, size_in_bits) =
             TensorDimension::calc_offsets_and_size(alloc_info.dtype, alloc_info.dimensions.iter());
         let size_in_bytes = size_in_bits.div_ceil(BITS_PER_BYTE);

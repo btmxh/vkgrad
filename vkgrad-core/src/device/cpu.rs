@@ -234,7 +234,7 @@ impl Device {
         Self
     }
 
-    pub fn tensor_from_ndarray<A, D>(&self, mut arr: Array<A, D>) -> Tensor
+    pub fn tensor_from_ndarray<A, D>(&self, mut arr: Array<A, D>) -> Tensor<'_>
     where
         A: TensorDataTypeTrait + 'static,
         D: Dimension + 'static,
@@ -245,7 +245,7 @@ impl Device {
         }
     }
 
-    pub fn tensor_from_ndarray_ref<A, D>(&self, arr: ArrayView<A, D>) -> TensorRef
+    pub fn tensor_from_ndarray_ref<A, D>(&self, arr: ArrayView<A, D>) -> TensorRef<'_>
     where
         A: TensorDataTypeTrait + 'static,
         D: Dimension + 'static,
@@ -266,7 +266,7 @@ impl Device {
         }
     }
 
-    pub fn tensor_from_ndarray_mut<A, D>(&self, mut arr: ArrayViewMut<A, D>) -> TensorMut
+    pub fn tensor_from_ndarray_mut<A, D>(&self, mut arr: ArrayViewMut<A, D>) -> TensorMut<'_>
     where
         A: TensorDataTypeTrait + 'static,
         D: Dimension + 'static,

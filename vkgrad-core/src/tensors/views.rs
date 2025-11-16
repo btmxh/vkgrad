@@ -62,7 +62,7 @@ pub trait TensorRefTrait {
         TensorDimension::calc_offsets_and_size(self.dtype(), self.dimensions().iter())
     }
 
-    fn as_ref(&self) -> TensorRef {
+    fn as_ref(&self) -> TensorRef<'_> {
         TensorRef {
             device: self.device(),
             dimensions: self.dimensions().iter().copied().collect(),
@@ -154,7 +154,7 @@ where
         Ok(())
     }
 
-    fn as_mut(&mut self) -> TensorMut {
+    fn as_mut(&mut self) -> TensorMut<'_> {
         TensorMut {
             device: self.device(),
             dimensions: self.dimensions().iter().copied().collect(),
