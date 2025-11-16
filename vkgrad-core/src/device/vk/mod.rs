@@ -570,6 +570,18 @@ impl Device {
         #[allow(non_snake_case)]
         let K = lshape[1];
 
+        log::trace!("Performing f32 GEMM: ({M}, {K}) x ({K}, {N}) -> ({M}, {N})");
+
+        let stride_lhs = lhs.elem_strides().ok_or(DeviceError::InvalidStrideError)?;
+        let stride_rhs = rhs.elem_strides().ok_or(DeviceError::InvalidStrideError)?;
+        let stride_ans = ans.elem_strides().ok_or(DeviceError::InvalidStrideError)?;
+        log::trace!(
+            "LHS strides: {:?}, RHS strides: {:?}, ANS strides: {:?}",
+            stride_lhs,
+            stride_rhs,
+            stride_ans
+        );
+
         let desc_set = DescriptorSet::new(
             self.descriptor_set_allocator.clone(),
             self.gemm_f32.layout().set_layouts()[0].clone(),
@@ -596,30 +608,15 @@ impl Device {
                         M: M as _,
                         N: N as _,
                         K: (K as i32).into(),
-                        stride_A: {
-                            let strides =
-                                lhs.elem_strides().ok_or(DeviceError::InvalidStrideError)?;
-                            log::trace!("{strides:?}");
-                            [strides[0] as _, strides[1] as _]
-                        },
-                        stride_B: {
-                            let strides =
-                                rhs.elem_strides().ok_or(DeviceError::InvalidStrideError)?;
-                            log::trace!("{strides:?}");
-                            [strides[0] as _, strides[1] as _]
-                        },
-                        stride_C: {
-                            let strides =
-                                ans.elem_strides().ok_or(DeviceError::InvalidStrideError)?;
-                            log::trace!("{strides:?}");
-                            [strides[0] as _, strides[1] as _]
-                        },
+                        stride_A: [stride_lhs[0] as _, stride_lhs[1] as _],
+                        stride_B: [stride_rhs[0] as _, stride_rhs[1] as _],
+                        stride_C: [stride_ans[0] as _, stride_ans[1] as _],
                     },
                 )?;
             unsafe {
                 cmd.dispatch([
-                    N.div_ceil(gemm::f32::TILE_SIZE) as _,
                     M.div_ceil(gemm::f32::TILE_SIZE) as _,
+                    N.div_ceil(gemm::f32::TILE_SIZE) as _,
                     1,
                 ])?
             };

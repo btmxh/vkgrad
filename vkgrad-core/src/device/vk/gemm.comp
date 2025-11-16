@@ -30,32 +30,19 @@ layout(push_constant) uniform PushConsts {
     ivec2 stride_C;
 };
 
-shared float Asub[TILE_SIZE][TILE_SIZE];
-shared float Bsub[TILE_SIZE][TILE_SIZE];
-
-// x is row, y is column...
 void main() {
-    float sum = 0.0;
+    const uint row = gl_GlobalInvocationID.x;
+    const uint col = gl_GlobalInvocationID.y;
 
-    for (int tile_offset = 0; tile_offset < K; tile_offset += TILE_SIZE) {
-        // load tile into shared memory
-        ivec2 pos_A = ivec2(gl_GlobalInvocationID.y, tile_offset + gl_LocalInvocationID.x);
-        Asub[gl_LocalInvocationID.y][gl_LocalInvocationID.x] =
-            all(lessThan(pos_A, ivec2(M, K))) ? A[dotEXT(pos_A, stride_A)] : float(0.0);
-        ivec2 pos_B = ivec2(tile_offset + gl_LocalInvocationID.y, gl_GlobalInvocationID.x);
-        Bsub[gl_LocalInvocationID.y][gl_LocalInvocationID.x] =
-            all(lessThan(pos_B, ivec2(K, N))) ? B[dotEXT(pos_B, stride_B)] : float(0.0);
-        barrier();
-
-        // perform tiled matmul
-        [[unroll]] for (uint k = 0; k < TILE_SIZE; ++k) {
-            sum += Asub[gl_LocalInvocationID.y][k] * Bsub[k][gl_LocalInvocationID.x];
+    if (row < uint(M) && col < uint(N)) {
+        float sum = 0.0;
+        for (int k = 0; k < K; ++k) {
+            ivec2 pos_A = ivec2(row, uint(k));
+            ivec2 pos_B = ivec2(uint(k), col);
+            float a = A[dotEXT(pos_A, stride_A)];
+            float b = B[dotEXT(pos_B, stride_B)];
+            sum += a * b;
         }
-        barrier();
-    }
-
-    ivec2 pos_C = ivec2(gl_GlobalInvocationID.yx);
-    if (all(lessThan(pos_C, ivec2(M, N)))) {
-        C[dotEXT(pos_C, stride_C)] = sum;
+        C[dotEXT(ivec2(row, col), stride_C)] += sum;
     }
 }
