@@ -19,7 +19,11 @@
 #define THREAD_M 8
 #endif
 
-layout(local_size_x = BLOCK_M * BLOCK_N / THREAD_M) in;
+#ifndef THREAD_N
+#define THREAD_N 8
+#endif
+
+layout(local_size_x = BLOCK_M * BLOCK_N / THREAD_M / THREAD_N) in;
 
 layout(std430, binding = 0) readonly buffer ABuffer {
     float A[];
@@ -52,13 +56,17 @@ shared float shared_B[BLOCK_K * BLOCK_N];
 #define A_get(pos) matrix_get(A, pos, stride_A, ivec2(M, K))
 #define B_get(pos) matrix_get(B, pos, stride_B, ivec2(K, N))
 #define C_get(pos) matrix_get(C, pos, stride_C, ivec2(M, N))
-#define C_set(pos, value) if((pos.x) < M && (pos.y) < N) C[dotEXT((pos), stride_C)] = (value)
+#define C_set(pos, value) \
+    do {\
+        if((pos.x) < M && (pos.y) < N)\
+            C[dotEXT((pos), stride_C)] = (value);\
+    } while(false)
 
 // x is row, y is col
 void main() {
     // these are coordinates for reading/writing C
-    const uint local_row = gl_LocalInvocationID.x / BLOCK_N;
-    const uint local_col = gl_LocalInvocationID.x % BLOCK_N;
+    const uint local_row = gl_LocalInvocationID.x / (BLOCK_N / THREAD_N);
+    const uint local_col = gl_LocalInvocationID.x % (BLOCK_N / THREAD_N);
     const uvec2 local_pos = uvec2(local_row, local_col);
 
     // these are coordinates for reading A and B to shared memory
@@ -69,16 +77,16 @@ void main() {
     const uvec2 local_pos_A = uvec2(local_row_A, local_col_A);
     const uvec2 local_pos_B = uvec2(local_row_B, local_col_B);
 
-    // transpose trick idk
-    const uvec2 block_pos_C = gl_WorkGroupID.xy * ivec2(BLOCK_M, BLOCK_N);
-    const uvec2 thread_pos_C = block_pos_C + local_pos * uvec2(THREAD_M, 1);
+    const uvec2 block_pos_C = gl_WorkGroupID.xy * uvec2(BLOCK_M, BLOCK_N);
+    const uvec2 thread_pos_C = block_pos_C + local_pos * uvec2(THREAD_M, THREAD_N);
 
-    float dot_product_total[THREAD_M];
-    for (int i = 0; i < THREAD_M; ++i) {
+    float dot_product_total[THREAD_M * THREAD_N];
+    for (int i = 0; i < THREAD_M * THREAD_N; ++i) {
         dot_product_total[i] = 0.0;
     }
 
-    int k = 0;
+    float reg_A[THREAD_M], reg_B[THREAD_N];
+
     for (int k = 0; k < K; k += BLOCK_K) {
         // Load tiles of A and B into shared_A and shared_B
         const uvec2 block_pos_A = uvec2(block_pos_C.x, k);
@@ -112,20 +120,31 @@ void main() {
 
         // Compute partial dot product for this tile, j is the dot product index
         for (int j = 0; j < BLOCK_K; ++j) {
-            // we use the same b for all m in THREAD_M
-            float b = shared_B[j * BLOCK_N + local_col];
-            for (int m = 0; m < THREAD_M; ++m) {
-                float a = shared_A[(local_row * THREAD_M + m) * BLOCK_K + j];
-                dot_product_total[m] += a * b;
+            for (int i = 0; i < THREAD_M; ++i) {
+                reg_A[i] = shared_A[(local_row * THREAD_M + i) * BLOCK_K + j];
+            }
+            for (int i = 0; i < THREAD_N; ++i) {
+                reg_B[i] = shared_B[j * BLOCK_N + local_col * THREAD_N + i];
+            }
+            for (int row = 0; row < THREAD_M; ++row) {
+                for (int col = 0; col < THREAD_N; ++col) {
+                    float a = reg_A[row];
+                    float b = reg_B[col];
+                    dot_product_total[row * THREAD_N + col] += a * b;
+                }
             }
         }
 
         barrier();
     }
 
-    for (int m = 0; m < THREAD_M; ++m) {
-        uvec2 pos_C = thread_pos_C + uvec2(m, 0);
-        float final_value = alpha * dot_product_total[m] + beta * C_get(ivec2(pos_C));
-        C_set(pos_C, final_value);
+    for (int row = 0; row < THREAD_M; ++row) {
+        for (int col = 0; col < THREAD_N; ++col) {
+            uvec2 pos_C = thread_pos_C + uvec2(row, col);
+            float final_value =
+                alpha * dot_product_total[row * THREAD_N + col] +
+                    beta * C_get(pos_C);
+            C_set(pos_C, final_value);
+        }
     }
 }

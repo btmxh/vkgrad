@@ -7,7 +7,7 @@
 ## Current status
 
 - [ ] Low level tensor API
-  - [ ] Matrix multiplication (current speed: GPU 3 TFLOPS, CPU 0.7-0.8 FLOPS)
+  - [ ] Matrix multiplication (current speed: GPU 4.219 TFLOPS, CPU 0.7-0.8 FLOPS)
     - [x] Baseline naive compute shader implementation.
     - [ ] Optimized compute shader implementation.
     - [ ] KhrCoopMat compute shader implementation.
